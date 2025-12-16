@@ -1,11 +1,11 @@
 [build]
-  command = "npm run build:client"
+  command = "npm install && npm run build"
   publish = "dist/public"
   functions = "netlify/functions"
 
 [dev]
-  command = "npm run dev:client"
-  port = 5173
+  command = "npm run dev"
+  port = 5000
   autoLaunch = false
 
 # Invite link previews (for OpenGraph meta tags)
@@ -29,5 +29,6 @@
 [functions]
   node_bundler = "esbuild"
 
-[context.production.environment]
+[build.environment]
   NODE_VERSION = "18"
+  NPM_FLAGS = "--legacy-peer-deps"

@@ -1,0 +1,33 @@
+[build]
+  command = "npm run build:client"
+  publish = "dist/public"
+  functions = "netlify/functions"
+
+[dev]
+  command = "npm run dev:client"
+  port = 5173
+  autoLaunch = false
+
+# Invite link previews (for OpenGraph meta tags)
+[[redirects]]
+  from = "/join/:inviteCode"
+  to = "/.netlify/functions/invite-preview"
+  status = 200
+
+# API routes to Netlify functions
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/:splat"
+  status = 200
+
+# Handle SPA routing - all other routes go to index.html
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[functions]
+  node_bundler = "esbuild"
+
+[context.production.environment]
+  NODE_VERSION = "18"

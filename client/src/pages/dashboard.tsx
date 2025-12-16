@@ -1,102 +1,155 @@
 import { useEffect, useState } from "react";
-import { useAuth } from "@/hooks/use-auth";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useAuth, signOut } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
-import { redirectToLogin, isUnauthorizedError } from "@/lib/auth-utils";
 import { motion } from "framer-motion";
 import confetti from "canvas-confetti";
-import { Plus, Users, LogOut, Gift, ExternalLink, Sparkles, Copy, Check } from "lucide-react";
+import { Plus, Users, LogOut, Gift, Sparkles, Copy, Check, Calendar } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import bgImage from "@assets/generated_images/festive_winter_background_with_subtle_holiday_elements.png";
-import type { Team } from "@shared/schema";
+import { createTeam, getUserTeams, getTeamByInviteCode, addTeamMember } from "@/lib/database";
+import type { Team, Currency } from "@/lib/types";
+import { CURRENCY_OPTIONS, CURRENCY_SYMBOLS } from "@/lib/types";
 
 export default function Dashboard() {
-  const { user, isLoading: authLoading, isAuthenticated } = useAuth();
+  const { user, profile, isLoading: authLoading, isAuthenticated } = useAuth();
   const { toast } = useToast();
-  const queryClient = useQueryClient();
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [isLoadingTeams, setIsLoadingTeams] = useState(true);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
-  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [copiedTeamId, setCopiedTeamId] = useState<string | null>(null);
 
+  // Create team form state
+  const [newTeamName, setNewTeamName] = useState("");
+  const [budgetMin, setBudgetMin] = useState("10");
+  const [budgetMax, setBudgetMax] = useState("50");
+  const [currency, setCurrency] = useState<Currency>("SGD");
+  const [exchangeDate, setExchangeDate] = useState("");
+  const [isCreating, setIsCreating] = useState(false);
+
+  // Join team state
+  const [inviteCode, setInviteCode] = useState("");
+  const [isJoining, setIsJoining] = useState(false);
+
+  // Redirect to login if not authenticated
   useEffect(() => {
     if (!authLoading && !isAuthenticated) {
-      redirectToLogin(toast);
+      window.location.href = "/";
     }
   }, [isAuthenticated, authLoading]);
 
-  const { data: teams = [] } = useQuery<Team[]>({
-    queryKey: ["/api/teams"],
-    queryFn: async () => {
-      const res = await fetch("/api/teams", { credentials: "include" });
-      if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`);
-      return res.json();
-    },
-    enabled: isAuthenticated,
-  });
+  // Load teams
+  useEffect(() => {
+    if (user) {
+      loadTeams();
+    }
+  }, [user]);
 
-  const createTeamMutation = useMutation({
-    mutationFn: async (name: string) => {
-      const res = await fetch("/api/teams", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ name }),
+  // Handle ?join= parameter
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const joinCode = params.get("join");
+
+    if (joinCode && isAuthenticated && user) {
+      handleJoinTeam(joinCode);
+      // Clear the URL parameter
+      window.history.replaceState({}, '', '/');
+    }
+  }, [isAuthenticated, user]);
+
+  async function loadTeams() {
+    if (!user) return;
+    try {
+      setIsLoadingTeams(true);
+      const userTeams = await getUserTeams(user.id);
+      setTeams(userTeams);
+    } catch (error: any) {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    } finally {
+      setIsLoadingTeams(false);
+    }
+  }
+
+  async function handleCreateTeam(e: React.FormEvent) {
+    e.preventDefault();
+    if (!user || !newTeamName.trim()) return;
+
+    try {
+      setIsCreating(true);
+      const team = await createTeam({
+        name: newTeamName.trim(),
+        ownerId: user.id,
+        budgetMin: parseInt(budgetMin) || 0,
+        budgetMax: parseInt(budgetMax) || 50,
+        currency,
+        exchangeDate: exchangeDate || null,
       });
-      if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`);
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/teams"] });
+
+      setTeams([...teams, team]);
       setCreateDialogOpen(false);
-      toast({ title: "Team created!", description: "Share the team link with your colleagues." });
+      setNewTeamName("");
+      setBudgetMin("10");
+      setBudgetMax("50");
+      setCurrency("SGD");
+      setExchangeDate("");
+
+      toast({ title: "Team created! 🎄", description: "Share the invite code with your friends." });
       confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
-    },
-    onError: (error: Error) => {
-      if (isUnauthorizedError(error)) {
-        redirectToLogin(toast);
+    } catch (error: any) {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    } finally {
+      setIsCreating(false);
+    }
+  }
+
+  async function handleJoinTeam(code?: string) {
+    const codeToUse = code || inviteCode.trim().toUpperCase();
+    if (!user || !codeToUse) return;
+
+    try {
+      setIsJoining(true);
+
+      const team = await getTeamByInviteCode(codeToUse);
+      if (!team) {
+        toast({ title: "Team not found", description: "Check the invite code and try again.", variant: "destructive" });
         return;
       }
-      toast({ title: "Error", description: error.message, variant: "destructive" });
-    },
-  });
 
-  const joinTeamMutation = useMutation({
-    mutationFn: async (teamId: string) => {
-      const res = await fetch(`/api/teams/${teamId}/join`, {
-        method: "POST",
-        credentials: "include",
-      });
-      if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`);
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/teams"] });
+      await addTeamMember(team.id, user.id);
+      await loadTeams();
+
       setJoinDialogOpen(false);
-      toast({ title: "Joined team!", description: "You're now part of the Secret Santa exchange." });
-    },
-    onError: (error: Error) => {
-      if (isUnauthorizedError(error)) {
-        redirectToLogin(toast);
-        return;
-      }
-      toast({ title: "Error", description: error.message, variant: "destructive" });
-    },
-  });
+      setInviteCode("");
 
-  const copyTeamLink = (teamId: string) => {
-    const url = `${window.location.origin}/?join=${teamId}`;
+      toast({ title: "Joined team! 🎉", description: `You're now part of ${team.name}.` });
+
+      // Navigate to team page
+      window.location.href = `/team/${team.id}`;
+    } catch (error: any) {
+      if (error.message?.includes('duplicate')) {
+        toast({ title: "Already a member", description: "You're already part of this team." });
+      } else {
+        toast({ title: "Error", description: error.message, variant: "destructive" });
+      }
+    } finally {
+      setIsJoining(false);
+    }
+  }
+
+  const copyInviteLink = (team: Team) => {
+    const url = `${window.location.origin}/join/${team.invite_code}`;
     navigator.clipboard.writeText(url);
-    setCopiedTeamId(teamId);
-    toast({ title: "Link copied!", description: "Share this with your team members." });
+    setCopiedTeamId(team.id);
+    toast({ title: "Link copied!", description: `Invite code: ${team.invite_code}` });
     setTimeout(() => setCopiedTeamId(null), 2000);
   };
 
-  if (authLoading) {
+  if (authLoading || isLoadingTeams) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center space-y-4">
@@ -111,9 +164,9 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen w-full bg-cover bg-center bg-fixed font-sans text-foreground"
-         style={{ backgroundImage: `url(${bgImage})` }}>
+      style={{ backgroundImage: `url(${bgImage})` }}>
       <div className="min-h-screen w-full bg-white/40 backdrop-blur-sm">
-        
+
         {/* Header */}
         <div className="border-b border-white/20 bg-white/60 backdrop-blur-md">
           <div className="container mx-auto px-4 py-4 flex justify-between items-center">
@@ -123,12 +176,12 @@ export default function Dashboard() {
             </div>
             <div className="flex items-center gap-4">
               <span className="text-sm text-muted-foreground" data-testid="text-user-email">
-                {user?.email || `${user?.firstName} ${user?.lastName}`}
+                {profile?.email || profile?.first_name || user?.email}
               </span>
-              <Button 
-                variant="ghost" 
+              <Button
+                variant="ghost"
                 size="sm"
-                onClick={() => window.location.href = "/api/logout"}
+                onClick={() => signOut()}
                 data-testid="button-logout"
               >
                 <LogOut className="w-4 h-4 mr-2" /> Logout
@@ -140,37 +193,90 @@ export default function Dashboard() {
         {/* Main Content */}
         <div className="container mx-auto px-4 py-8">
           <div className="max-w-4xl mx-auto space-y-8">
-            
+
             {/* Actions */}
-            <div className="flex gap-4 justify-center">
+            <div className="flex gap-4 justify-center flex-wrap">
               <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
                 <DialogTrigger asChild>
                   <Button className="rounded-full px-8 shadow-lg" data-testid="button-create-team">
                     <Plus className="w-5 h-5 mr-2" /> Create New Team
                   </Button>
                 </DialogTrigger>
-                <DialogContent>
+                <DialogContent className="max-w-md">
                   <DialogHeader>
-                    <DialogTitle>Create a New Team</DialogTitle>
+                    <DialogTitle>Create a New Team 🎄</DialogTitle>
                   </DialogHeader>
-                  <form onSubmit={(e) => {
-                    e.preventDefault();
-                    const formData = new FormData(e.currentTarget);
-                    const name = formData.get("name") as string;
-                    if (name.trim()) createTeamMutation.mutate(name.trim());
-                  }} className="space-y-4">
+                  <form onSubmit={handleCreateTeam} className="space-y-4">
                     <div>
                       <Label htmlFor="team-name">Team Name</Label>
-                      <Input 
-                        id="team-name" 
-                        name="name" 
-                        placeholder="e.g. Engineering Team 2024" 
+                      <Input
+                        id="team-name"
+                        value={newTeamName}
+                        onChange={(e) => setNewTeamName(e.target.value)}
+                        placeholder="e.g. Office Squad 2024"
                         required
                         data-testid="input-team-name"
                       />
                     </div>
-                    <Button type="submit" className="w-full" disabled={createTeamMutation.isPending} data-testid="button-submit-team">
-                      {createTeamMutation.isPending ? "Creating..." : "Create Team"}
+
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <Label htmlFor="budget-min">Min Budget</Label>
+                        <Input
+                          id="budget-min"
+                          type="number"
+                          value={budgetMin}
+                          onChange={(e) => setBudgetMin(e.target.value)}
+                          placeholder="10"
+                          min="0"
+                          data-testid="input-budget-min"
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor="budget-max">Max Budget</Label>
+                        <Input
+                          id="budget-max"
+                          type="number"
+                          value={budgetMax}
+                          onChange={(e) => setBudgetMax(e.target.value)}
+                          placeholder="50"
+                          min="0"
+                          data-testid="input-budget-max"
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor="currency">Currency</Label>
+                        <Select value={currency} onValueChange={(v) => setCurrency(v as Currency)}>
+                          <SelectTrigger id="currency" data-testid="select-currency">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {CURRENCY_OPTIONS.map((opt) => (
+                              <SelectItem key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <Label htmlFor="exchange-date">
+                        <Calendar className="w-4 h-4 inline mr-1" />
+                        Gift Exchange Date (optional)
+                      </Label>
+                      <Input
+                        id="exchange-date"
+                        type="date"
+                        value={exchangeDate}
+                        onChange={(e) => setExchangeDate(e.target.value)}
+                        data-testid="input-exchange-date"
+                      />
+                    </div>
+
+                    <Button type="submit" className="w-full" disabled={isCreating} data-testid="button-submit-team">
+                      {isCreating ? "Creating..." : "Create Team"}
                     </Button>
                   </form>
                 </DialogContent>
@@ -179,31 +285,32 @@ export default function Dashboard() {
               <Dialog open={joinDialogOpen} onOpenChange={setJoinDialogOpen}>
                 <DialogTrigger asChild>
                   <Button variant="outline" className="rounded-full px-8 shadow-lg" data-testid="button-join-team">
-                    <Users className="w-5 h-5 mr-2" /> Join Existing Team
+                    <Users className="w-5 h-5 mr-2" /> Join Team
                   </Button>
                 </DialogTrigger>
                 <DialogContent>
                   <DialogHeader>
                     <DialogTitle>Join a Team</DialogTitle>
                   </DialogHeader>
-                  <form onSubmit={(e) => {
-                    e.preventDefault();
-                    const formData = new FormData(e.currentTarget);
-                    const teamId = formData.get("teamId") as string;
-                    if (teamId.trim()) joinTeamMutation.mutate(teamId.trim());
-                  }} className="space-y-4">
+                  <form onSubmit={(e) => { e.preventDefault(); handleJoinTeam(); }} className="space-y-4">
                     <div>
-                      <Label htmlFor="team-id">Team ID</Label>
-                      <Input 
-                        id="team-id" 
-                        name="teamId" 
-                        placeholder="Paste the team ID here" 
+                      <Label htmlFor="invite-code">Invite Code</Label>
+                      <Input
+                        id="invite-code"
+                        value={inviteCode}
+                        onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
+                        placeholder="e.g. ABC123"
+                        maxLength={6}
+                        className="text-center text-2xl tracking-widest font-mono"
                         required
-                        data-testid="input-team-id"
+                        data-testid="input-invite-code"
                       />
+                      <p className="text-xs text-muted-foreground mt-1 text-center">
+                        Enter the 6-character code from your friend
+                      </p>
                     </div>
-                    <Button type="submit" className="w-full" disabled={joinTeamMutation.isPending} data-testid="button-submit-join">
-                      {joinTeamMutation.isPending ? "Joining..." : "Join Team"}
+                    <Button type="submit" className="w-full" disabled={isJoining} data-testid="button-submit-join">
+                      {isJoining ? "Joining..." : "Join Team"}
                     </Button>
                   </form>
                 </DialogContent>
@@ -219,7 +326,7 @@ export default function Dashboard() {
                   </div>
                   <h3 className="text-2xl font-display text-foreground">No Teams Yet</h3>
                   <p className="text-muted-foreground max-w-md mx-auto">
-                    Create a new team to start your Secret Santa exchange, or join an existing team with a team ID.
+                    Create a new team to start your Secret Santa exchange, or join an existing team with an invite code.
                   </p>
                 </CardContent>
               </Card>
@@ -232,38 +339,50 @@ export default function Dashboard() {
                     animate={{ opacity: 1, scale: 1 }}
                   >
                     <Card className="glass-panel border-0 shadow-xl hover:shadow-2xl transition-shadow cursor-pointer"
-                          onClick={() => window.location.href = `/team/${team.id}`}
-                          data-testid={`card-team-${team.id}`}>
+                      onClick={() => window.location.href = `/team/${team.id}`}
+                      data-testid={`card-team-${team.id}`}>
                       <CardHeader>
                         <CardTitle className="flex items-center justify-between">
-                          <span className="text-2xl font-display text-primary" data-testid={`text-team-name-${team.id}`}>{team.name}</span>
-                          {team.ownerId === user?.id && (
-                            <span className="text-xs bg-accent/20 text-accent-foreground px-3 py-1 rounded-full font-bold">OWNER</span>
+                          <span className="text-2xl font-display text-primary" data-testid={`text-team-name-${team.id}`}>
+                            {team.name}
+                          </span>
+                          {team.owner_id === user?.id && (
+                            <span className="text-xs bg-accent/20 text-accent-foreground px-3 py-1 rounded-full font-bold">
+                              OWNER
+                            </span>
                           )}
                         </CardTitle>
                       </CardHeader>
                       <CardContent className="space-y-4">
-                        <p className="text-sm text-muted-foreground">
-                          Created {new Date(team.createdAt).toLocaleDateString()}
-                        </p>
+                        <div className="flex flex-wrap gap-2 text-sm text-muted-foreground">
+                          <span className="bg-secondary/30 px-2 py-1 rounded">
+                            Budget: {CURRENCY_SYMBOLS[team.currency]}{team.budget_min} - {CURRENCY_SYMBOLS[team.currency]}{team.budget_max}
+                          </span>
+                          {team.exchange_date && (
+                            <span className="bg-secondary/30 px-2 py-1 rounded">
+                              <Calendar className="w-3 h-3 inline mr-1" />
+                              {new Date(team.exchange_date).toLocaleDateString()}
+                            </span>
+                          )}
+                        </div>
                         <div className="flex gap-2">
-                          <Button 
-                            size="sm" 
+                          <Button
+                            size="sm"
                             variant="outline"
                             className="flex-1"
                             onClick={(e) => {
                               e.stopPropagation();
-                              copyTeamLink(team.id);
+                              copyInviteLink(team);
                             }}
                             data-testid={`button-copy-link-${team.id}`}
                           >
                             {copiedTeamId === team.id ? (
                               <><Check className="w-4 h-4 mr-2" /> Copied!</>
                             ) : (
-                              <><Copy className="w-4 h-4 mr-2" /> Copy Link</>
+                              <><Copy className="w-4 h-4 mr-2" /> {team.invite_code}</>
                             )}
                           </Button>
-                          <Button 
+                          <Button
                             size="sm"
                             className="flex-1"
                             onClick={(e) => {

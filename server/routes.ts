@@ -2,9 +2,8 @@ import type { Express } from "express";
 import { type Server } from "http";
 import { storage } from "./storage";
 import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
-import { insertTeamSchema, insertWishlistSchema, users } from "@shared/schema";
-import { db } from "./db";
-import { eq } from "drizzle-orm";
+import { authStorage } from "./replit_integrations/auth/storage";
+import { insertTeamSchema, insertWishlistSchema } from "@shared/schema";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -92,7 +91,7 @@ export async function registerRoutes(
       // Fetch user details for each member
       const members = await Promise.all(
         memberIds.map(async (m) => {
-          const [user] = await db.select().from(users).where(eq(users.id, m.userId));
+          const user = await authStorage.getUser(m.userId);
           return user;
         })
       );
@@ -212,7 +211,7 @@ export async function registerRoutes(
 
       // Get receiver's wishlist and user info
       const wishlist = await storage.getWishlist(teamId, assignment.receiverId);
-      const [receiver] = await db.select().from(users).where(eq(users.id, assignment.receiverId));
+      const receiver = await authStorage.getUser(assignment.receiverId);
 
       res.json({
         assignment,

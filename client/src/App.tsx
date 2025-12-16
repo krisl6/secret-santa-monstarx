@@ -1,42 +1,37 @@
 import { Switch, Route, useLocation } from "wouter";
-import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
+import { queryClient } from "./lib/queryClient";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/hooks/use-auth";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import Landing from "@/pages/landing";
 import Dashboard from "@/pages/dashboard";
 import TeamPage from "@/pages/team";
 import NotFound from "@/pages/not-found";
+import { getTeamByInviteCode } from "@/lib/database";
 
 function Router() {
   const { isAuthenticated, isLoading } = useAuth();
   const [location, setLocation] = useLocation();
+  const [joining, setJoining] = useState(false);
 
-  // Handle ?join=teamId query parameter
+  // Handle /join/:inviteCode route
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const joinTeamId = params.get("join");
-    
-    if (joinTeamId && isAuthenticated) {
-      // Join the team and redirect
-      fetch(`/api/teams/${joinTeamId}/join`, {
-        method: "POST",
-        credentials: "include",
-      })
-        .then(res => {
-          if (res.ok) {
-            setLocation(`/team/${joinTeamId}`);
-          } else {
-            setLocation("/");
-          }
-        })
-        .catch(() => setLocation("/"));
-    }
-  }, [isAuthenticated, setLocation]);
+    const handleJoinRoute = async () => {
+      if (location.startsWith("/join/") && isAuthenticated) {
+        const inviteCode = location.replace("/join/", "");
+        if (inviteCode) {
+          setJoining(true);
+          // Redirect to dashboard with join parameter
+          setLocation(`/?join=${inviteCode}`);
+        }
+      }
+    };
+    handleJoinRoute();
+  }, [location, isAuthenticated, setLocation]);
 
-  if (isLoading) {
+  if (isLoading || joining) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center space-y-4">
@@ -50,6 +45,18 @@ function Router() {
   return (
     <Switch>
       <Route path="/" component={isAuthenticated ? Dashboard : Landing} />
+      <Route path="/join/:inviteCode">
+        {(params) => {
+          // If not authenticated, show landing with join intent
+          if (!isAuthenticated) {
+            // Store the invite code so user can join after login
+            sessionStorage.setItem("pendingJoinCode", params.inviteCode);
+            return <Landing />;
+          }
+          // Redirect will happen in useEffect above
+          return null;
+        }}
+      </Route>
       <Route path="/team/:teamId">
         {(params) => <TeamPage params={params} />}
       </Route>

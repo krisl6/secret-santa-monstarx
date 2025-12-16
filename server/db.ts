@@ -1,3 +1,8 @@
+// This file is kept for backwards compatibility but is no longer used.
+// The app now uses Convex instead of PostgreSQL.
+// If you need to use PostgreSQL, uncomment the code below and set DATABASE_URL.
+
+/*
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import * as schema from "@shared/schema";
@@ -15,3 +20,8 @@ export const pool = new Pool({
 });
 
 export const db = drizzle({ client: pool, schema, casing: "snake_case" });
+*/
+
+// Placeholder exports for compatibility
+export const pool = null as any;
+export const db = null as any;

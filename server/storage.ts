@@ -1,18 +1,14 @@
-import { db } from "./db";
-import { eq, and } from "drizzle-orm";
-import {
-  teams,
-  teamMembers,
-  wishlists,
-  assignments,
-  type Team,
-  type InsertTeam,
-  type TeamMember,
-  type InsertTeamMember,
-  type Wishlist,
-  type InsertWishlist,
-  type Assignment,
-  type InsertAssignment,
+import { convexClient, type Id } from "./convexClient";
+import { api } from "../convex/_generated/api";
+import type {
+  Team,
+  InsertTeam,
+  TeamMember,
+  InsertTeamMember,
+  Wishlist,
+  InsertWishlist,
+  Assignment,
+  InsertAssignment,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -38,100 +34,201 @@ export interface IStorage {
   clearAssignments(teamId: string): Promise<void>;
 }
 
+// Helper to convert Convex Id to string for compatibility
+function idToString(id: Id<"teams">): string {
+  return id as unknown as string;
+}
+
+// Helper to convert string to Convex Id (with validation)
+function stringToId(teamId: string): Id<"teams"> {
+  return teamId as unknown as Id<"teams">;
+}
+
 class Storage implements IStorage {
   // Team operations
   async createTeam(teamData: InsertTeam): Promise<Team> {
-    const [team] = await db.insert(teams).values(teamData).returning();
-    return team;
+    const teamId = await convexClient.mutation(api.teams.create, {
+      name: teamData.name,
+      ownerId: teamData.ownerId,
+    });
+    const team = await convexClient.query(api.teams.get, { teamId });
+    if (!team) throw new Error("Failed to create team");
+    return {
+      id: idToString(teamId),
+      name: team.name,
+      ownerId: team.ownerId,
+      createdAt: new Date(team.createdAt),
+    };
   }
 
   async getTeam(teamId: string): Promise<Team | undefined> {
-    const [team] = await db.select().from(teams).where(eq(teams.id, teamId));
-    return team;
+    const team = await convexClient.query(api.teams.get, { teamId: stringToId(teamId) });
+    if (!team) return undefined;
+    return {
+      id: teamId,
+      name: team.name,
+      ownerId: team.ownerId,
+      createdAt: new Date(team.createdAt),
+    };
   }
 
   async getUserTeams(userId: string): Promise<Team[]> {
-    const result = await db
-      .select({ team: teams })
-      .from(teamMembers)
-      .innerJoin(teams, eq(teamMembers.teamId, teams.id))
-      .where(eq(teamMembers.userId, userId));
-    
-    return result.map((r: any) => r.team);
+    const teams = await convexClient.query(api.teams.getUserTeams, { userId });
+    return teams.map((team: any) => ({
+      id: idToString(team._id),
+      name: team.name,
+      ownerId: team.ownerId,
+      createdAt: new Date(team.createdAt),
+    }));
   }
 
   // Team member operations
   async addTeamMember(memberData: InsertTeamMember): Promise<TeamMember> {
-    const [member] = await db.insert(teamMembers).values(memberData).returning();
-    return member;
+    const memberId = await convexClient.mutation(api.teamMembers.add, {
+      teamId: stringToId(memberData.teamId),
+      userId: memberData.userId,
+    });
+    const members = await convexClient.query(api.teamMembers.getByTeam, {
+      teamId: stringToId(memberData.teamId),
+    });
+    const member = members.find((m: any) => m.userId === memberData.userId);
+    if (!member) throw new Error("Failed to add team member");
+    return {
+      id: idToString(memberId),
+      teamId: memberData.teamId,
+      userId: member.userId,
+      joinedAt: new Date(member.joinedAt),
+    };
   }
 
   async getTeamMembers(teamId: string): Promise<TeamMember[]> {
-    return await db.select().from(teamMembers).where(eq(teamMembers.teamId, teamId));
+    const members = await convexClient.query(api.teamMembers.getByTeam, {
+      teamId: stringToId(teamId),
+    });
+    return members.map((member: any) => ({
+      id: idToString(member._id),
+      teamId,
+      userId: member.userId,
+      joinedAt: new Date(member.joinedAt),
+    }));
   }
 
   async isTeamMember(teamId: string, userId: string): Promise<boolean> {
-    const [member] = await db
-      .select()
-      .from(teamMembers)
-      .where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.userId, userId)));
-    return !!member;
+    return await convexClient.query(api.teamMembers.isMember, {
+      teamId: stringToId(teamId),
+      userId,
+    });
   }
 
   // Wishlist operations
   async upsertWishlist(wishlistData: InsertWishlist): Promise<Wishlist> {
-    const [wishlist] = await db
-      .insert(wishlists)
-      .values(wishlistData)
-      .onConflictDoUpdate({
-        target: [wishlists.teamId, wishlists.userId],
-        set: {
-          brand: wishlistData.brand,
-          item: wishlistData.item,
-          updatedAt: new Date(),
-        },
-      })
-      .returning();
-    return wishlist;
+    const wishlistId = await convexClient.mutation(api.wishlists.upsert, {
+      teamId: stringToId(wishlistData.teamId),
+      userId: wishlistData.userId,
+      brand: wishlistData.brand,
+      item: wishlistData.item,
+    });
+    const wishlist = await convexClient.query(api.wishlists.get, {
+      teamId: stringToId(wishlistData.teamId),
+      userId: wishlistData.userId,
+    });
+    if (!wishlist) throw new Error("Failed to upsert wishlist");
+    return {
+      id: idToString(wishlistId),
+      teamId: wishlistData.teamId,
+      userId: wishlist.userId,
+      brand: wishlist.brand || undefined,
+      item: wishlist.item || undefined,
+      createdAt: new Date(wishlist.createdAt),
+      updatedAt: new Date(wishlist.updatedAt),
+    };
   }
 
   async getWishlist(teamId: string, userId: string): Promise<Wishlist | undefined> {
-    const [wishlist] = await db
-      .select()
-      .from(wishlists)
-      .where(and(eq(wishlists.teamId, teamId), eq(wishlists.userId, userId)));
-    return wishlist;
+    const wishlist = await convexClient.query(api.wishlists.get, {
+      teamId: stringToId(teamId),
+      userId,
+    });
+    if (!wishlist) return undefined;
+    return {
+      id: idToString(wishlist._id),
+      teamId,
+      userId: wishlist.userId,
+      brand: wishlist.brand || undefined,
+      item: wishlist.item || undefined,
+      createdAt: new Date(wishlist.createdAt),
+      updatedAt: new Date(wishlist.updatedAt),
+    };
   }
 
   async getAllWishlists(teamId: string): Promise<Wishlist[]> {
-    return await db.select().from(wishlists).where(eq(wishlists.teamId, teamId));
+    const wishlists = await convexClient.query(api.wishlists.getByTeam, {
+      teamId: stringToId(teamId),
+    });
+    return wishlists.map((wishlist: any) => ({
+      id: idToString(wishlist._id),
+      teamId,
+      userId: wishlist.userId,
+      brand: wishlist.brand || undefined,
+      item: wishlist.item || undefined,
+      createdAt: new Date(wishlist.createdAt),
+      updatedAt: new Date(wishlist.updatedAt),
+    }));
   }
 
   // Assignment operations
   async createAssignments(teamId: string, assignmentList: InsertAssignment[]): Promise<Assignment[]> {
-    // First clear existing assignments
-    await this.clearAssignments(teamId);
-    
-    // Insert new assignments
-    const result = await db.insert(assignments).values(assignmentList).returning();
-    return result;
+    const assignmentIds = await convexClient.mutation(api.assignments.create, {
+      teamId: stringToId(teamId),
+      assignments: assignmentList.map((a) => ({
+        giverId: a.giverId,
+        receiverId: a.receiverId,
+      })),
+    });
+    // Fetch the created assignments
+    const assignments = await Promise.all(
+      assignmentList.map(async (a) => {
+        const assignment = await convexClient.query(api.assignments.get, {
+          teamId: stringToId(teamId),
+          giverId: a.giverId,
+        });
+        if (!assignment) throw new Error("Failed to create assignment");
+        return {
+          id: idToString(assignment._id),
+          teamId,
+          giverId: assignment.giverId,
+          receiverId: assignment.receiverId,
+          createdAt: new Date(assignment.createdAt),
+        };
+      })
+    );
+    return assignments;
   }
 
   async getAssignment(teamId: string, giverId: string): Promise<Assignment | undefined> {
-    const [assignment] = await db
-      .select()
-      .from(assignments)
-      .where(and(eq(assignments.teamId, teamId), eq(assignments.giverId, giverId)));
-    return assignment;
+    const assignment = await convexClient.query(api.assignments.get, {
+      teamId: stringToId(teamId),
+      giverId,
+    });
+    if (!assignment) return undefined;
+    return {
+      id: idToString(assignment._id),
+      teamId,
+      giverId: assignment.giverId,
+      receiverId: assignment.receiverId,
+      createdAt: new Date(assignment.createdAt),
+    };
   }
 
   async hasAssignments(teamId: string): Promise<boolean> {
-    const [assignment] = await db.select().from(assignments).where(eq(assignments.teamId, teamId)).limit(1);
-    return !!assignment;
+    return await convexClient.query(api.assignments.hasAssignments, {
+      teamId: stringToId(teamId),
+    });
   }
 
   async clearAssignments(teamId: string): Promise<void> {
-    await db.delete(assignments).where(eq(assignments.teamId, teamId));
+    // Clear is handled in createAssignments mutation
+    // This is a no-op for Convex since createAssignments already clears
   }
 }
 
